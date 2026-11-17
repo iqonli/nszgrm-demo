@@ -63,6 +63,19 @@ jobs:
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
+      - name: Verify model size labels before exporting
+        run: |
+          python3 - <<'PY'
+          import pathlib,re
+          text=pathlib.Path('index.html').read_text('utf-8')
+          for model in ('models_int8.json','models_fp32.json'):
+              if not re.search(re.escape(model)+r'\s+\d+\.\d{2}MiB</small>',text):
+                  raise SystemExit('Missing two-decimal MiB label for '+model)
+          if 'id="convert-simplify" checked' not in text:
+              raise SystemExit('Simplified Chinese option missing')
+          if text.count('id="opencc-zip-b64"')!=1:
+              raise SystemExit('OpenCC inline payload missing')
+          PY
       - name: Upload the standalone index HTML
         uses: actions/upload-artifact@v4
         with:
