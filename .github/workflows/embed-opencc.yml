@@ -62,3 +62,11 @@ jobs:
             git pull --rebase origin "${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
+
+      - name: Upload the standalone index HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: nszgrm-demo-index-html
+          path: index.html
+          if-no-files-found: error
+          retention-days: 3
