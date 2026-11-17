@@ -324,7 +324,7 @@ function el(tag,content,cls){const n=document.createElement(tag);if(content!==un
 function status(message,kind=''){const n=$('status');n.textContent=message;n.className='status '+kind;}
 function showStatus(){status(active?MODEL_META[active].title+'模型已加载':'无模型加载',active?'ok':'');}
 function setBusy(value){busy=value;for(const id of ['load','download','local','restore','clear'])$(id).disabled=value;}
-function modelSize(n){return n>=1048576?(n/1048576).toFixed(1)+' MiB':n>=1024?(n/1024).toFixed(1)+' KiB':n+' B';}
+function modelSize(n){return n>=1048576?(n/1048576).toFixed(2)+' MiB':n>=1024?(n/1024).toFixed(1)+' KiB':n+' B';}
 function progressStart(file){
   $('download-progress').hidden=false;
   $('download-progress').classList.remove('error');
