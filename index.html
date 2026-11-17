@@ -632,7 +632,9 @@ async function classify(){
   if(active!==selected()||!MODEL_CACHE.has(active)){out.append(el('p','请先加载选中的模型。','error-message'));return;}
   if(!name){out.append(el('p','请输入姓名。','error-message'));return;}
   try{
-    const normalized=($('convert-simplify').checked && /[\u3400-\u9fff]/.test(name))\n      ? (await loadEmbeddedOpenCC())(name.normalize('NFKC')) : name;\n    const result=NSZGRM.predict(normalized,MODEL_CACHE.get(active));
+    const normalized=($('convert-simplify').checked && /[\u3400-\u9fff]/.test(name))
+      ? (await loadEmbeddedOpenCC())(name.normalize('NFKC')) : name;
+    const result=NSZGRM.predict(normalized,MODEL_CACHE.get(active));
     if(result.error){out.append(el('p',result.error,'error-message'));return;}
     const fixed=correctedResult(result.name,result);
     out.append(el('h3','书写类型'));
