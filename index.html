@@ -46,6 +46,11 @@ button:hover:not(:disabled){filter:brightness(.96)}button:disabled{opacity:.50;c
 .input-row{display:flex;align-items:stretch;gap:10px}
 #name{border:1px solid #c7d3e2;border-radius:9px;min-width:0;flex:1;font:inherit;font-size:22px;padding:9px 13px;background:#fff;color:var(--ink)}
 #run{min-width:88px}
+.conversion-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:9px;font-size:14px}
+.conversion-row label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.conversion-row input{margin:0;accent-color:var(--blue)}
+.conversion-warning{color:var(--red);font-weight:400}
+.conversion-warning[hidden]{display:none}
 #result{min-height:95px}
 .score-line{display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow-x:auto;scrollbar-width:thin;padding-bottom:4px}
 .score-item{display:inline-flex;align-items:baseline;white-space:nowrap;font-weight:750;font-variant-numeric:tabular-nums;line-height:1.23}
@@ -118,6 +123,7 @@ tr.raw-fusion td{font-weight:750;background:#f7faff}
 <section class="card">
   <h2>开始姓名检测</h2>
   <div class="input-row"><input type="text" id="name" autocomplete="off"><button id="run" type="button">　跑　</button></div>
+  <div class="conversion-row"><label><input type="checkbox" id="convert-simplify" checked> 繁体转换为简体</label><span id="conversion-warning" class="conversion-warning" hidden>使用繁体中文将导致结果不准确</span></div>
 </section>
 <section class="card" id="result" aria-live="polite"><h2>结果</h2></section>
 </main>
@@ -580,12 +586,53 @@ function scoreTable(parent,task,preferred){
   for(const col of cols)fused.append(el('td',pct(task.probabilities[task.classes.indexOf(col)]),'num'));
   tbody.append(fused);table.append(tbody);wrap.append(table);parent.append(wrap);
 }
-function classify(){
+let embeddedOpenCCPromise=null;
+function loadEmbeddedOpenCC(){
+ if(embeddedOpenCCPromise)return embeddedOpenCCPromise;
+ embeddedOpenCCPromise=(async()=>{
+   const element=$('opencc-zip-b64');
+   const encoded=element?.textContent.trim();
+   if(!encoded)throw Error('HTML 内未找到 OpenCC 压缩资源');
+   if(typeof DecompressionStream!=='function')throw Error('浏览器不支持内置 ZIP 解压');
+   const bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
+   const header=new DataView(bytes.buffer);
+   if(header.getUint32(0,true)!==0x04034b50)throw Error('OpenCC ZIP 格式不正确');
+   if(header.getUint16(8,true)!==8 || (header.getUint16(6,true)&1))
+      throw Error('OpenCC ZIP 不是受支持的 Deflate 格式');
+   const length=header.getUint32(18,true);
+   const offset=30+header.getUint16(26,true)+header.getUint16(28,true);
+   if(!length || offset+length>bytes.length)throw Error('OpenCC ZIP 数据不完整');
+   const compressed=bytes.subarray(offset,offset+length);
+   const source=await new Response(
+     new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+   ).text();
+   const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+   try{
+     await new Promise((resolve,reject)=>{
+       const script=document.createElement('script');
+       script.src=url;
+       script.onload=()=>{script.remove();resolve();};
+       script.onerror=()=>{script.remove();reject(Error('无法执行 OpenCC 脚本'));};
+       document.head.append(script);
+     });
+   }finally{URL.revokeObjectURL(url);}
+   const api=window.OpenCC;
+   if(!api || typeof api.Converter!=='function')throw Error('OpenCC 浏览器接口不可用');
+   const jp=api.Converter({from:'jp',to:'cn'});
+   const toCn=api.Converter({from:'t',to:'cn'});
+   return value=>toCn(jp(value)).replaceAll('郞','郎');
+ })().catch(error=>{embeddedOpenCCPromise=null;throw error;});
+ return embeddedOpenCCPromise;
+}
+function updateConversionWarning(){
+ $('conversion-warning').hidden=$('convert-simplify').checked;
+}
+async function classify(){
   resetResult();const out=$('result'),name=$('name').value.trim();
   if(active!==selected()||!MODEL_CACHE.has(active)){out.append(el('p','请先加载选中的模型。','error-message'));return;}
   if(!name){out.append(el('p','请输入姓名。','error-message'));return;}
   try{
-    const result=NSZGRM.predict(name,MODEL_CACHE.get(active));
+    const normalized=($('convert-simplify').checked && /[\u3400-\u9fff]/.test(name))\n      ? (await loadEmbeddedOpenCC())(name.normalize('NFKC')) : name;\n    const result=NSZGRM.predict(normalized,MODEL_CACHE.get(active));
     if(result.error){out.append(el('p',result.error,'error-message'));return;}
     const fixed=correctedResult(result.name,result);
     out.append(el('h3','书写类型'));
@@ -606,8 +653,13 @@ $('file').addEventListener('change',e=>localFile(e.target.files[0]));
 $('restore').addEventListener('click',restore);
 $('clear').addEventListener('click',clearCache);
 $('run').addEventListener('click',classify);
+$('convert-simplify').addEventListener('change',updateConversionWarning);
+updateConversionWarning();
 $('name').addEventListener('keydown',e=>{if(e.key==='Enter')classify();});
 for(const r of document.querySelectorAll('input[name="variant"]'))r.addEventListener('change',resetResult);
 </script>
+<!-- NSZGRM_OPENCC_EMBED_BEGIN -->
+<!-- The embedded Deflate ZIP is generated from the repository's opencc-full.js. -->
+<!-- NSZGRM_OPENCC_EMBED_END -->
 </body>
 </html>
