@@ -20,7 +20,6 @@ h3{font-size:17px;line-height:1.4;margin:0 0 13px}
 h4{font-size:15px;line-height:1.4;margin:20px 0 9px}
 .sub{font-size:13px;color:var(--muted);margin:0 0 21px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:15px;padding:22px;margin-bottom:15px;box-shadow:0 5px 22px #1c395c07}
-.card-part+.card-part{border-top:1px solid var(--border);margin-top:23px;padding-top:22px}
 .pick{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .pick label{border:1px solid #cbd8ea;border-radius:10px;padding:13px 15px;display:flex;gap:11px;align-items:flex-start;cursor:pointer}
 .pick label:has(input:checked){border-color:var(--blue);background:#f4f8ff}
@@ -123,13 +122,10 @@ tr.raw-fusion td{font-weight:750;background:#f7faff}
 <section class="card" id="result" aria-live="polite"><h2>结果</h2></section>
 </main>
 <script>
-/* NSZGRM full-precision offline inference. Every model always contributes. */
 (function(root) {
 'use strict';
 const minuscule=1e-30;
 
-// Symmetric per-row INT8 decoder, cached for the lifetime of the model.
-// float32 scales are applied per output row. No network requests or WASM.
 function decodeWeights(t){
  if(Array.isArray(t))return t.map(row=>Float32Array.from(row));
  if(!['sym_int8_per_row_v1','sym_int16_per_row_v1'].includes(t.quant_format))throw Error('Unsupported quant format');
@@ -363,12 +359,12 @@ function progressError(error){
   $('download-progress-text').textContent='下载失败：'+error.message;
   $('download-progress-value').textContent='';
 }
-function requestModel(file,responseType){
+function requestModel(file){
   progressStart(file);
   return new Promise((resolve,reject)=>{
     const xhr=new XMLHttpRequest();
     xhr.open('GET',new URL(file,document.baseURI),true);
-    xhr.responseType=responseType;
+    xhr.responseType='text';
     xhr.onprogress=e=>progressUpdate(e.loaded,e.lengthComputable?e.total:0);
     xhr.onload=()=>{
       if(xhr.status>=200&&xhr.status<300)resolve(xhr.response);
@@ -440,7 +436,7 @@ async function loadServer(){
   const key=selected(),file=MODEL_META[key].file;
   setBusy(true);status('正在下载模型……');
   try{
-    const raw=await requestModel(file,'text');
+    const raw=await requestModel(file);
     progressFinish('下载完成，正在解析模型……');
     status('正在加载模型……');
     const model=parseModel(raw);
@@ -451,19 +447,16 @@ async function loadServer(){
   }catch(e){progressError(e);status('加载失败：'+e.message,'error');}
   finally{setBusy(false);}
 }
-async function downloadFile(){
+function downloadFile(){
   if(busy)return;
-  const key=selected(),file=MODEL_META[key].file;
-  setBusy(true);
-  try{
-    const blob=await requestModel(file,'blob');
-    const url=URL.createObjectURL(blob);
-    const a=el('a');a.href=url;a.download=file;
-    document.body.append(a);a.click();a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-    progressFinish('下载完成，文件已交给浏览器保存');
-  }catch(e){progressError(e);}
-  finally{setBusy(false);}
+  const file=MODEL_META[selected()].file;
+  $('download-progress').hidden=true;
+  const a=el('a');
+  a.href=new URL(file,document.baseURI).href;
+  a.download=file;
+  document.body.append(a);
+  a.click();
+  a.remove();
 }
 async function localFile(file){
   if(!file||busy)return;
