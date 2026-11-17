@@ -1,0 +1,86 @@
+name: Update OpenCC full.js and ZIP (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nszgrm-demo-opencc
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest published OpenCC browser UMD bundle
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,pathlib,tarfile,urllib.request,io,re
+          headers={'User-Agent':'nszgrm-demo-opencc-updater'}
+          req=urllib.request.Request('https://registry.npmjs.org/opencc-js/latest',headers=headers)
+          with urllib.request.urlopen(req,timeout=45) as response:
+              metadata=json.load(response)
+          version=metadata['version']
+          if not re.fullmatch(r'\d+\.\d+\.\d+',version):
+              raise SystemExit('Unexpected npm latest version: '+version)
+          tarball=metadata['dist']['tarball']
+          if not tarball.startswith('https://registry.npmjs.org/opencc-js/-/opencc-js-'):
+              raise SystemExit('Unexpected upstream tarball host')
+          req=urllib.request.Request(tarball,headers=headers)
+          with urllib.request.urlopen(req,timeout=90) as response:
+              payload=response.read(30_000_001)
+          if len(payload)>30_000_000: raise SystemExit('OpenCC package too large')
+          with tarfile.open(fileobj=io.BytesIO(payload),mode='r:gz') as tf:
+              member=tf.getmember('package/dist/umd/full.js')
+              if not member.isfile() or member.size>20_000_000:
+                  raise SystemExit('Missing or oversized full.js')
+              js=tf.extractfile(member).read()
+          if len(js)<1000:raise SystemExit('OpenCC full.js unexpectedly empty')
+          pathlib.Path('opencc-full.js').write_bytes(js)
+          print('Downloaded OpenCC',version,'full.js',len(js),'bytes')
+          PY
+
+      - name: Maximum Deflate ZIP and refresh HTML embedded Base64
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,pathlib,re,zipfile
+          source=pathlib.Path('opencc-full.js')
+          archive=pathlib.Path('opencc-full.zip')
+          with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              z.write(source,'full.js',compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
+          with zipfile.ZipFile(archive) as z:
+              assert z.namelist()==['full.js']
+              assert z.read('full.js')==source.read_bytes()
+          p=pathlib.Path('index.html')
+          content=p.read_text('utf-8')
+          start='<!-- NSZGRM_OPENCC_EMBED_BEGIN -->'
+          end='<!-- NSZGRM_OPENCC_EMBED_END -->'
+          if content.count(start)!=1 or content.count(end)!=1:
+              raise SystemExit('Missing embedded OpenCC markers')
+          base64_text=base64.b64encode(archive.read_bytes()).decode('ascii')
+          new_block=start+'\n<script type="application/octet-stream" id="opencc-zip-b64">'+base64_text+'</script>\n'+end
+          content=re.sub(re.escape(start)+r'.*?'+re.escape(end),lambda m:new_block,content,count=1,flags=re.S)
+          p.write_text(content,'utf-8')
+          print('ZIP',archive.stat().st_size,'bytes, Base64',len(base64_text),'chars')
+          PY
+
+      - name: Commit updated OpenCC JS, ZIP and inline payload
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add opencc-full.js opencc-full.zip index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update OpenCC browser bundle and embedded ZIP'
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo 'OpenCC is already up to date'
+          fi
