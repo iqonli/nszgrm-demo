@@ -123,6 +123,7 @@ jobs:
           git add model/2model-2026-11-17.7z index.html
           if ! git diff --cached --quiet; then
             git commit -m "Sync audited models from mifuler run $RUN_ID"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           else
             echo 'Model archive and two MiB labels already current.'
