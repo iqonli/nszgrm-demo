@@ -33,6 +33,16 @@ button.outline{background:white;border:1px solid #cad7e9;color:#27568b}
 button:hover:not(:disabled){filter:brightness(.96)}button:disabled{opacity:.50;cursor:default}
 .status{margin:0;font-size:15px;min-height:24px;color:var(--muted)}
 .status.ok{color:#237450}.status.error{color:#ad2334}
+.download-progress{margin-top:13px}
+.download-progress[hidden]{display:none}
+.download-progress-info{display:flex;justify-content:space-between;align-items:baseline;gap:12px;color:var(--muted);font-size:13px;margin-bottom:6px}
+.download-progress-info span:last-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+.download-progress-track{height:9px;overflow:hidden;background:#e8eef7;border-radius:8px}
+.download-progress-bar{height:100%;width:0;background:var(--blue);border-radius:8px;transition:width .15s ease}
+.download-progress-track.indeterminate .download-progress-bar{width:35%;animation:model-download-indeterminate 1.2s ease-in-out infinite}
+.download-progress.error .download-progress-bar{background:var(--red)}
+@keyframes model-download-indeterminate{0%{transform:translateX(-110%)}100%{transform:translateX(300%)}}
+@media(prefers-reduced-motion:reduce){.download-progress-bar{transition:none}.download-progress-track.indeterminate .download-progress-bar{animation:none;width:100%;opacity:.35}}
 #file{display:none}
 .input-row{display:flex;align-items:stretch;gap:10px}
 #name{border:1px solid #c7d3e2;border-radius:9px;min-width:0;flex:1;font:inherit;font-size:22px;padding:9px 13px;background:#fff;color:var(--ink)}
@@ -92,6 +102,10 @@ tr.raw-fusion td{font-weight:750;background:#f7faff}
     <div class="controls">
       <button id="load" class="secondary" type="button">下载选中并加载到浏览器</button>
       <button id="download" type="button" class="secondary">仅下载到本地</button>
+    </div>
+    <div id="download-progress" class="download-progress" hidden>
+      <div class="download-progress-info"><span id="download-progress-text" aria-live="polite">准备下载</span><span id="download-progress-value"></span></div>
+      <div id="download-progress-track" class="download-progress-track indeterminate" role="progressbar" aria-label="模型下载进度" aria-valuemin="0" aria-valuemax="100"><div id="download-progress-bar" class="download-progress-bar"></div></div>
     </div>
     <div class="controls">
       <button id="local" class="secondary" type="button">从本地加载选中模型文件</button>
@@ -308,6 +322,63 @@ function el(tag,content,cls){const n=document.createElement(tag);if(content!==un
 function status(message,kind=''){const n=$('status');n.textContent=message;n.className='status '+kind;}
 function showStatus(){status(active?MODEL_META[active].title+'模型已加载':'无模型加载',active?'ok':'');}
 function setBusy(value){busy=value;for(const id of ['load','download','local','restore','clear'])$(id).disabled=value;}
+function modelSize(n){return n>=1048576?(n/1048576).toFixed(1)+' MiB':n>=1024?(n/1024).toFixed(1)+' KiB':n+' B';}
+function progressStart(file){
+  $('download-progress').hidden=false;
+  $('download-progress').classList.remove('error');
+  $('download-progress-track').classList.add('indeterminate');
+  $('download-progress-track').removeAttribute('aria-valuenow');
+  $('download-progress-bar').style.width='0';
+  $('download-progress-text').textContent='正在下载 '+file;
+  $('download-progress-value').textContent='连接中…';
+}
+function progressUpdate(loaded,total){
+  const track=$('download-progress-track');
+  if(total>0){
+    const percent=Math.min(100,Math.round(100*loaded/total));
+    track.classList.remove('indeterminate');
+    track.setAttribute('aria-valuenow',String(percent));
+    $('download-progress-bar').style.width=percent+'%';
+    $('download-progress-value').textContent=percent+'%';
+    $('download-progress-text').textContent='已下载 '+modelSize(loaded)+' / '+modelSize(total);
+  }else{
+    track.classList.add('indeterminate');
+    track.removeAttribute('aria-valuenow');
+    $('download-progress-value').textContent='下载中…';
+    $('download-progress-text').textContent='已下载 '+modelSize(loaded);
+  }
+}
+function progressFinish(message){
+  const track=$('download-progress-track');
+  track.classList.remove('indeterminate');
+  track.setAttribute('aria-valuenow','100');
+  $('download-progress-bar').style.width='100%';
+  $('download-progress-value').textContent='100%';
+  $('download-progress-text').textContent=message;
+}
+function progressError(error){
+  $('download-progress').classList.add('error');
+  $('download-progress-track').classList.remove('indeterminate');
+  $('download-progress-track').removeAttribute('aria-valuenow');
+  $('download-progress-text').textContent='下载失败：'+error.message;
+  $('download-progress-value').textContent='';
+}
+function requestModel(file,responseType){
+  progressStart(file);
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('GET',new URL(file,document.baseURI),true);
+    xhr.responseType=responseType;
+    xhr.onprogress=e=>progressUpdate(e.loaded,e.lengthComputable?e.total:0);
+    xhr.onload=()=>{
+      if(xhr.status>=200&&xhr.status<300)resolve(xhr.response);
+      else reject(Error('HTTP '+xhr.status));
+    };
+    xhr.onerror=()=>reject(Error('网络连接失败'));
+    xhr.onabort=()=>reject(Error('下载已取消'));
+    xhr.send();
+  });
+}
 function resetResult(){ $('result').replaceChildren(el('h2','结果')); }
 function validateBundle(obj){
   if(!obj||typeof obj!=='object'||!obj.models||typeof obj.models!=='object')throw Error('模型 JSON 无效');
@@ -367,22 +438,32 @@ function activate(key,model){
 async function loadServer(){
   if(busy)return;
   const key=selected(),file=MODEL_META[key].file;
-  setBusy(true);status('正在加载模型……');
+  setBusy(true);status('正在下载模型……');
   try{
-    const response=await fetch(new URL(file,document.baseURI),{cache:'no-store'});
-    if(!response.ok)throw Error('HTTP '+response.status);
-    const raw=await response.text(),model=parseModel(raw);
+    const raw=await requestModel(file,'text');
+    progressFinish('下载完成，正在解析模型……');
+    status('正在加载模型……');
+    const model=parseModel(raw);
     if(detectVariant(model)!==key)throw Error('模型格式与所选版本不一致');
     await cacheWrite(key,raw);
     activate(key,model);
-  }catch(e){status('加载失败：'+e.message,'error');}
+    progressFinish('模型下载完成');
+  }catch(e){progressError(e);status('加载失败：'+e.message,'error');}
   finally{setBusy(false);}
 }
-function downloadFile(){
+async function downloadFile(){
   if(busy)return;
-  const key=selected();
-  const a=el('a');a.href=new URL(MODEL_META[key].file,document.baseURI).href;a.download=MODEL_META[key].file;
-  document.body.append(a);a.click();a.remove();
+  const key=selected(),file=MODEL_META[key].file;
+  setBusy(true);
+  try{
+    const blob=await requestModel(file,'blob');
+    const url=URL.createObjectURL(blob);
+    const a=el('a');a.href=url;a.download=file;
+    document.body.append(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    progressFinish('下载完成，文件已交给浏览器保存');
+  }catch(e){progressError(e);}
+  finally{setBusy(false);}
 }
 async function localFile(file){
   if(!file||busy)return;
