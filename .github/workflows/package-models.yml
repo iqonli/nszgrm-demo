@@ -1,0 +1,57 @@
+name: Package two NSZGRM models
+
+on:
+  push:
+    paths:
+      - .github/workflows/package-models.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download two models from the completed training release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download research-v3-44065315717 \
+            --repo mifuler/nszgrm \
+            --pattern nszgrm-models-44065315717.zip \
+            --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/two-models"
+          unzip -j "$RUNNER_TEMP/nszgrm-models-44065315717.zip" \
+            models_fp32.json models_int8.json \
+            -d "$RUNNER_TEMP/two-models"
+          test -s "$RUNNER_TEMP/two-models/models_fp32.json"
+          test -s "$RUNNER_TEMP/two-models/models_int8.json"
+
+      - name: Compress with maximum 7z LZMA2 settings
+        run: |
+          set -euo pipefail
+          if ! command -v 7z >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y p7zip-full
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/model"
+          cd "$RUNNER_TEMP/two-models"
+          7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=256m -ms=on -mmt=on \
+            "$GITHUB_WORKSPACE/model/2model-2026-11-17.7z" \
+            models_fp32.json models_int8.json
+          7z t "$GITHUB_WORKSPACE/model/2model-2026-11-17.7z"
+
+      - name: Commit the archive to model/
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add model/2model-2026-11-17.7z
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add compressed FP32 and INT8/16 models'
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
