@@ -1,0 +1,64 @@
+name: Embed repository OpenCC into index.html
+
+on:
+  push:
+    paths:
+      - '.github/workflows/embed-opencc.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nszgrm-demo-opencc
+  cancel-in-progress: false
+
+jobs:
+  embed:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: ZIP maximum Deflate + Base64 embed
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,hashlib,pathlib,re,zipfile
+          root=pathlib.Path('.')
+          source=root/'opencc-full.js'
+          if not source.is_file() or source.stat().st_size < 1000:
+              raise SystemExit('Missing repository root opencc-full.js')
+          archive=root/'opencc-full.zip'
+          with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as output:
+              output.write(source,'full.js',compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
+          with zipfile.ZipFile(archive) as test:
+              if test.namelist()!=['full.js'] or test.read('full.js')!=source.read_bytes():
+                  raise SystemExit('ZIP round trip verification failed')
+          encoded=base64.b64encode(archive.read_bytes()).decode('ascii')
+          document=root/'index.html'
+          html=document.read_text('utf-8')
+          start='<!-- NSZGRM_OPENCC_EMBED_BEGIN -->'
+          end='<!-- NSZGRM_OPENCC_EMBED_END -->'
+          if html.count(start)!=1 or html.count(end)!=1:
+              raise SystemExit('Expected one pair of OpenCC embed markers')
+          tag='<script type="application/octet-stream" id="opencc-zip-b64">'+encoded+'</script>'
+          block=start+'\n'+tag+'\n'+end
+          html=re.sub(re.escape(start)+r'.*?'+re.escape(end),lambda _:block,html,count=1,flags=re.S)
+          if html.count('id="opencc-zip-b64"')!=1:
+              raise SystemExit('Embedded resource verification failed')
+          document.write_text(html,'utf-8')
+          print('OpenCC JS size:',source.stat().st_size)
+          print('Deflate ZIP size:',archive.stat().st_size)
+          print('Base64 length:',len(encoded))
+          print('OpenCC SHA256:',hashlib.sha256(source.read_bytes()).hexdigest())
+          PY
+      - name: Commit ZIP and embedded HTML
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add opencc-full.zip index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'Embed compressed OpenCC JavaScript in static HTML'
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
