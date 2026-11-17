@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: nszgrm-demo
+    runtime: static
+    branch: main
+    buildCommand: bash build.sh
+    staticPublishPath: ./public
