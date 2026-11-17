@@ -75,6 +75,16 @@ jobs:
               raise SystemExit('Simplified Chinese option missing')
           if text.count('id="opencc-zip-b64"')!=1:
               raise SystemExit('OpenCC inline payload missing')
+          import subprocess,tempfile
+          scripts=re.findall(r'<script(?:\\s[^>]*)?>(.*?)</script>',text,re.S)
+          scripts=[script for script in scripts if not script.startswith('UEs') and 'application/octet-stream' not in script[:200]]
+          if len(scripts)!=2:raise SystemExit('Expected two executable inline scripts')
+          with tempfile.TemporaryDirectory() as folder:
+              for i,script in enumerate(scripts):
+                  path=pathlib.Path(folder)/(str(i)+'.js')
+                  path.write_text(script,'utf-8')
+                  subprocess.run(['node','--check',str(path)],check=True)
+          print('Both JavaScript blocks passed node --check')
           PY
       - name: Upload the standalone index HTML
         uses: actions/upload-artifact@v4
