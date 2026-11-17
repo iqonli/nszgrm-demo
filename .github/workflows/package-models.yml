@@ -24,12 +24,26 @@ jobs:
             --repo mifuler/nszgrm \
             --pattern nszgrm-models-44065315717.zip \
             --dir "$RUNNER_TEMP"
-          mkdir -p "$RUNNER_TEMP/two-models"
-          unzip -j "$RUNNER_TEMP/nszgrm-models-44065315717.zip" \
-            models_fp32.json models_int8.json \
-            -d "$RUNNER_TEMP/two-models"
-          test -s "$RUNNER_TEMP/two-models/models_fp32.json"
-          test -s "$RUNNER_TEMP/two-models/models_int8.json"
+          python3 - "$RUNNER_TEMP/nszgrm-models-44065315717.zip" "$RUNNER_TEMP/two-models" <<'PY'
+          import pathlib
+          import shutil
+          import sys
+          import zipfile
+
+          target = pathlib.Path(sys.argv[2])
+          target.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              for filename in ('models_fp32.json', 'models_int8.json'):
+                  matches = [item for item in archive.infolist()
+                             if not item.is_dir() and pathlib.PurePosixPath(item.filename).name == filename]
+                  if len(matches) != 1:
+                      raise SystemExit(f'Expected one {filename}, found {len(matches)}; ZIP entries: {archive.namelist()}')
+                  with archive.open(matches[0]) as source, (target / filename).open('wb') as output:
+                      shutil.copyfileobj(source, output)
+                  if (target / filename).stat().st_size == 0:
+                      raise SystemExit(f'{filename} extracted empty')
+                  print(f'{matches[0].filename} -> {filename}: {(target / filename).stat().st_size} bytes')
+          PY
 
       - name: Compress with maximum 7z LZMA2 settings
         run: |
